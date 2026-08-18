@@ -1,229 +1,213 @@
 package com.liedetector.test
 
+import android.Manifest
+import android.content.pm.PackageManager
+import android.graphics.Color
 import android.os.Bundle
-import androidx.activity.ComponentActivity
-import androidx.activity.compose.setContent
-import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
-import kotlin.math.min
+import android.os.CountDownTimer
+import android.view.View
+import android.widget.Button
+import android.widget.TextView
+import android.widget.Toast
+import androidx.appcompat.app.AppCompatActivity
+import androidx.camera.core.CameraSelector
+import androidx.camera.core.ImageAnalysis
+import androidx.camera.core.Preview
+import androidx.camera.lifecycle.ProcessCameraProvider
+import androidx.camera.view.PreviewView
+import androidx.core.app.ActivityCompat
+import androidx.core.content.ContextCompat
+import com.google.mlkit.vision.common.InputImage
+import com.google.mlkit.vision.face.Face
+import com.google.mlkit.vision.face.FaceDetection
+import com.google.mlkit.vision.face.FaceDetectorOptions
+import java.util.concurrent.Executors
 
-class MainActivity : ComponentActivity() {
+class MainActivity : AppCompatActivity() {
+
+    private lateinit var previewView: PreviewView
+    private lateinit var txtStatus: TextView
+    private lateinit var btnStart: Button
+    private lateinit var resultOverlay: View
+
+    private var isAnalyzing = false
+    private var blinkCount = 0
+    private var stressPoints = 0
+    private var wasEyeClosed = false
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContent { LieDetectorApp() }
-    }
-}
-
-@Composable
-fun LieDetectorApp() {
-    var tab by remember { mutableStateOf(0) }
-    var text by remember { mutableStateOf("") }
-    var score by remember { mutableStateOf<Int?>(null) }
-    var reasons by remember { mutableStateOf(listOf<String>()) }
-
-    MaterialTheme(
-        colorScheme = lightColorScheme(
-            primary = Color(0xFF6C4DFF),
-            background = Color(0xFFF7F7FA)
-        )
-    ) {
-        Surface(modifier = Modifier.fillMaxSize(), color = Color(0xFFF7F7FA)) {
-            Column(Modifier.fillMaxSize()) {
-                Header()
-                when (tab) {
-                    0 -> TextAnalyzer(
-                        text = text,
-                        onText = { text = it; score = null },
-                        score = score,
-                        reasons = reasons,
-                        onAnalyze = {
-                            val result = analyze(text)
-                            score = result.first
-                            reasons = result.second
-                        }
-                    )
-                    1 -> ScreenshotTab()
-                    else -> HistoryTab()
-                }
-                NavigationBar {
-                    NavigationBarItem(selected = tab == 0, onClick = { tab = 0 },
-                        icon = { Text("📝") }, label = { Text("Text") })
-                    NavigationBarItem(selected = tab == 1, onClick = { tab = 1 },
-                        icon = { Text("📷") }, label = { Text("Photo") })
-                    NavigationBarItem(selected = tab == 2, onClick = { tab = 2 },
-                        icon = { Text("📊") }, label = { Text("History") })
-                }
-            }
+        
+        // პროგრამულად ვაწყობთ მარტივ ინტერფეისს
+        val layout = android.widget.RelativeLayout(this)
+        
+        previewView = PreviewView(this).apply {
+            layoutParams = android.widget.RelativeLayout.LayoutParams(
+                android.widget.RelativeLayout.LayoutParams.MATCH_PARENT,
+                android.widget.RelativeLayout.LayoutParams.MATCH_PARENT
+            )
         }
-    }
-}
+        layout.addView(previewView)
 
-@Composable
-fun Header() {
-    Column(Modifier.padding(horizontal = 20.dp, vertical = 18.dp)) {
-        Text("Lie Detector AI", fontSize = 26.sp, fontWeight = FontWeight.Bold)
-        Text("Credibility & deception analysis", color = Color.Gray, fontSize = 14.sp)
-    }
-}
+        resultOverlay = View(this).apply {
+            layoutParams = android.widget.RelativeLayout.LayoutParams(
+                android.widget.RelativeLayout.LayoutParams.MATCH_PARENT,
+                android.widget.RelativeLayout.LayoutParams.MATCH_PARENT
+            )
+            visibility = View.GONE
+        }
+        layout.addView(resultOverlay)
 
-@Composable
-fun TextAnalyzer(
-    text: String,
-    onText: (String) -> Unit,
-    score: Int?,
-    reasons: List<String>,
-    onAnalyze: () -> Unit
-) {
-    Column(
-        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp)
-    ) {
-        Text("Paste a message", fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
-        OutlinedTextField(
-            value = text,
-            onValueChange = onText,
-            modifier = Modifier.fillMaxWidth().height(180.dp),
-            placeholder = { Text("Paste an SMS, chat message or statement here…") },
-            shape = RoundedCornerShape(16.dp)
-        )
-        Button(
-            onClick = onAnalyze,
-            enabled = text.trim().isNotEmpty(),
-            modifier = Modifier.fillMaxWidth().height(54.dp),
-            shape = RoundedCornerShape(16.dp)
-        ) { Text("ANALYZE", fontWeight = FontWeight.Bold) }
+        txtStatus = TextView(this).apply {
+            text = "PRESS START TO ANALYZE"
+            textSize = 24f
+            setTextColor(Color.WHITE)
+            setBackgroundColor(Color.parseColor("#80000000"))
+            setPadding(32, 16, 32, 16)
+            val params = android.widget.RelativeLayout.LayoutParams(
+                android.widget.RelativeLayout.LayoutParams.WRAP_CONTENT,
+                android.widget.RelativeLayout.LayoutParams.WRAP_CONTENT
+            )
+            params.addRule(android.widget.RelativeLayout.CENTER_HORIZONTAL)
+            params.addRule(android.widget.RelativeLayout.ALIGN_PARENT_TOP)
+            params.topMargin = 100
+            layoutParams = params
+        }
+        layout.addView(txtStatus)
 
-        if (score != null) {
-            ResultCard(score, reasons)
+        btnStart = Button(this).apply {
+            text = "START AI TEST"
+            textSize = 18f
+            val params = android.widget.RelativeLayout.LayoutParams(
+                android.widget.RelativeLayout.LayoutParams.WRAP_CONTENT,
+                android.widget.RelativeLayout.LayoutParams.WRAP_CONTENT
+            )
+            params.addRule(android.widget.RelativeLayout.CENTER_HORIZONTAL)
+            params.addRule(android.widget.RelativeLayout.ALIGN_PARENT_BOTTOM)
+            params.bottomMargin = 100
+            layoutParams = params
+            setOnClickListener { startScan() }
+        }
+        layout.addView(btnStart)
+
+        setContentView(layout)
+
+        if (allPermissionsGranted()) {
+            startCamera()
         } else {
-            Card(shape = RoundedCornerShape(18.dp)) {
-                Column(Modifier.padding(18.dp)) {
-                    Text("How it works", fontWeight = FontWeight.Bold)
-                    Spacer(Modifier.height(8.dp))
-                    Text("This demo uses linguistic signals and contradictions to estimate how suspicious a statement sounds. It does not prove whether a person is actually lying.")
+            ActivityCompat.requestPermissions(
+                this, REQUIRED_PERMISSIONS, REQUEST_CODE_PERMISSIONS
+            )
+        }
+    }
+
+    private fun startCamera() {
+        val cameraProviderFuture = ProcessCameraProvider.getInstance(this)
+        cameraProviderFuture.addListener({
+            val cameraProvider = cameraProviderFuture.get()
+            val preview = Preview.Builder().build().also {
+                it.setSurfaceProvider(previewView.surfaceProvider)
+            }
+
+            val options = FaceDetectorOptions.Builder()
+                .setClassificationMode(FaceDetectorOptions.CLASSIFICATION_MODE_ALL)
+                .build()
+            val detector = FaceDetection.getClient(options)
+
+            val imageAnalysis = ImageAnalysis.Builder()
+                .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                .build()
+
+            imageAnalysis.setAnalyzer(Executors.newSingleThreadExecutor()) { imageProxy ->
+                @androidx.camera.core.ExperimentalGetImage
+                val mediaImage = imageProxy.image
+                if (mediaImage != null && isAnalyzing) {
+                    val image = InputImage.fromMediaImage(mediaImage, imageProxy.imageInfo.rotationDegrees)
+                    detector.process(image)
+                        .addOnSuccessListener { faces ->
+                            for (face in faces) {
+                                analyzeFaceMetrics(face)
+                            }
+                        }
+                        .addOnCompleteListener { imageProxy.close() }
+                } else {
+                    imageProxy.close()
                 }
             }
-        }
-    }
-}
 
-@Composable
-fun ResultCard(score: Int, reasons: List<String>) {
-    Card(shape = RoundedCornerShape(22.dp)) {
-        Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Text("Deception probability", color = Color.Gray)
-            Text("$score%", fontSize = 48.sp, fontWeight = FontWeight.Bold)
-            Text(
-                when {
-                    score >= 75 -> "Highly suspicious"
-                    score >= 50 -> "Suspicious"
-                    score >= 30 -> "Uncertain"
-                    else -> "Mostly credible"
-                },
-                fontSize = 18.sp,
-                fontWeight = FontWeight.SemiBold
-            )
-            HorizontalDivider()
-            Text("Why?", fontWeight = FontWeight.Bold)
-            reasons.forEach { Text("• $it") }
-            Spacer(Modifier.height(4.dp))
-            Text(
-                "⚠ This is an AI-style estimate, not proof of deception.",
-                fontSize = 12.sp,
-                color = Color.Gray
-            )
-        }
-    }
-}
+            val cameraSelector = CameraSelector.DEFAULT_FRONT_CAMERA
 
-@Composable
-fun ScreenshotTab() {
-    Column(
-        Modifier.fillMaxSize().padding(20.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp)
-    ) {
-        Text("Screenshot analysis", fontSize = 20.sp, fontWeight = FontWeight.Bold)
-        Card(shape = RoundedCornerShape(20.dp)) {
-            Column(Modifier.padding(22.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                Text("📷", fontSize = 44.sp)
-                Spacer(Modifier.height(10.dp))
-                Text("Screenshot / photo OCR", fontWeight = FontWeight.Bold)
-                Text("The production version will extract chat text from screenshots and analyze each speaker separately.")
-                Spacer(Modifier.height(16.dp))
-                OutlinedButton(onClick = {}) { Text("CHOOSE IMAGE (demo)") }
+            try {
+                cameraProvider.unbindAll()
+                cameraProvider.bindToLifecycle(this, cameraSelector, preview, imageAnalysis)
+            } catch (e: Exception) {
+                Toast.makeText(this, "Camera setup failed", Toast.LENGTH_SHORT).show()
             }
-        }
+        }, ContextCompat.getMainExecutor(this))
     }
-}
 
-@Composable
-fun HistoryTab() {
-    Column(Modifier.fillMaxSize().padding(20.dp)) {
-        Text("Analysis history", fontSize = 20.sp, fontWeight = FontWeight.Bold)
-        Spacer(Modifier.height(12.dp))
-        Card(shape = RoundedCornerShape(18.dp)) {
-            Column(Modifier.padding(18.dp)) {
-                Text("No analyses saved yet.")
-                Text("Your future results will appear here.", color = Color.Gray, fontSize = 13.sp)
+    private fun analyzeFaceMetrics(face: Face) {
+        val leftEye = face.leftEyeOpenProbability ?: 1.0f
+        val rightEye = face.rightEyeOpenProbability ?: 1.0f
+        val smile = face.smilingProbability ?: 0.0f
+
+        // თვალის დახამხამების დეტექცია
+        if (leftEye < 0.3f && rightEye < 0.3f) {
+            if (!wasEyeClosed) {
+                blinkCount++
+                wasEyeClosed = true
             }
+        } else {
+            wasEyeClosed = false
+        }
+
+        // ყალბი/დაძაბული მიმიკის ანალიზი
+        if (smile in 0.1f..0.5f) {
+            stressPoints += 2 // დაძაბული ღიმილი
         }
     }
-}
 
-fun analyze(input: String): Pair<Int, List<String>> {
-    val t = input.lowercase()
-    var score = 18
-    val reasons = mutableListOf<String>()
+    private fun startScan() {
+        isAnalyzing = true
+        blinkCount = 0
+        stressPoints = 0
+        resultOverlay.visibility = View.GONE
+        btnStart.isEnabled = false
 
-    val defensive = listOf(
-        "გეფიცები", "მართლა", "ნამდვილად", "trust me", "believe me",
-        "i swear", "honestly", "to be honest", "სიმართლეს გეუბნები"
-    )
-    val vague = listOf(
-        "ალბათ", "როგორც მახსოვს", "არ ვიცი", "maybe", "probably",
-        "i think", "not sure", "somewhere", "later", "some time"
-    )
-    val absolute = listOf(
-        "არასდროს", "ყოველთვის", "never", "always", "100%"
-    )
+        object : CountDownTimer(7000, 1000) {
+            override fun onTick(millisUntilFinished: Long) {
+                txtStatus.text = "ANALYZING... ${millisUntilFinished / 1000}s"
+            }
 
-    if (defensive.any { t.contains(it) }) {
-        score += 18
-        reasons += "Strong reassurance / defensive wording detected."
-    }
-    if (vague.any { t.contains(it) }) {
-        score += 12
-        reasons += "Vague or uncertain wording reduces credibility."
-    }
-    if (absolute.any { t.contains(it) }) {
-        score += 10
-        reasons += "Absolute claims can be a suspicious linguistic signal."
-    }
-    if (input.length < 35) {
-        score += 8
-        reasons += "Very short statement provides limited verifiable detail."
-    } else if (input.length > 300) {
-        score += 5
-        reasons += "Long explanation contains more opportunities for inconsistency."
-    }
-    val exclamations = input.count { it == '!' }
-    if (exclamations >= 2) {
-        score += 7
-        reasons += "Repeated exclamation marks suggest heightened emphasis."
+            override fun onFinish() {
+                isAnalyzing = false
+                evaluateResult()
+            }
+        }.start()
     }
 
-    score = min(score, 96)
-    if (reasons.isEmpty()) reasons += "No strong deception signals were detected."
-    return score to reasons.take(4)
+    private fun evaluateResult() {
+        btnStart.isEnabled = true
+        
+        // ლოგიკა: თუ 7 წამში 5-ზე მეტჯერ დაახამხამა ან მიმიკური სტრესი მაღალია -> LIE
+        val isLie = blinkCount > 5 || stressPoints > 10
+
+        resultOverlay.visibility = View.VISIBLE
+        if (isLie) {
+            resultOverlay.setBackgroundColor(Color.parseColor("#CCFF0000")) // წითელი
+            txtStatus.text = "🚨 LIE DETECTED! 🚨"
+        } else {
+            resultOverlay.setBackgroundColor(Color.parseColor("#CC00FF00")) // მწვანე
+            txtStatus.text = "✅ TRUTH / TRUE ✅"
+        }
+    }
+
+    private fun allPermissionsGranted() = REQUIRED_PERMISSIONS.all {
+        ContextCompat.checkSelfPermission(baseContext, it) == PackageManager.PERMISSION_GRANTED
+    }
+
+    companion object {
+        private const val REQUEST_CODE_PERMISSIONS = 10
+        private val REQUIRED_PERMISSIONS = arrayOf(Manifest.permission.CAMERA)
+    }
 }
